@@ -1,0 +1,27 @@
+{
+  "name": "claude-local-proxy",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "tsx watch src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.14.0",
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "dotenv": "^17.2.1",
+    "hono": "^4.9.2",
+    "https-proxy-agent": "^7.0.6",
+    "node-fetch": "^2.7.0",
+    "undici": "^7.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.4",
+    "typescript": "^5.9.2"
+  }
+}
