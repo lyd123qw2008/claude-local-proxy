@@ -40,8 +40,10 @@ app.post('/:type/*', async c => {
     
     const type = pathParts[0]
     // Extract the complete provider URL from the path
-    // 排除固定的 /v1/messages 部分（如果存在）
     let providerUrlParts = pathParts.slice(1)
+    
+    // 对于所有提供商，都排除固定的 /v1/messages 部分（如果存在）
+    // 因为 Claude 客户端会自动添加这个路径
     const lastTwoParts = providerUrlParts.slice(-2)
     if (lastTwoParts[0] === 'v1' && lastTwoParts[1] === 'messages') {
         providerUrlParts = providerUrlParts.slice(0, -2)
@@ -68,10 +70,18 @@ app.post('/:type/*', async c => {
         return c.json({ error: `Provider ${type} not supported` }, 400)
     }
 
-    // 支持两种 API 密钥传递方式
+    // 支持三种 API 密钥传递方式
     let apiKey = c.req.header('x-api-key')
     
-    // 如果 header 中没有，尝试从环境变量获取
+    // 如果没有 x-api-key，尝试获取 Authorization header (Claude 客户端使用这种方式)
+    if (!apiKey) {
+        const authHeader = c.req.header('Authorization')
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            apiKey = authHeader.substring(7) // 移除 "Bearer " 前缀
+        }
+    }
+    
+    // 如果 header 中都没有，尝试从环境变量获取
     if (!apiKey) {
         const providerType = type.toUpperCase()
         apiKey = process.env[`${providerType}_API_KEY`]
@@ -198,6 +208,7 @@ const port = 3000
 console.log(`Server is running on port ${port}`)
 
 serve({
+    hostname: "0.0.0.0",
     fetch: app.fetch,
     port
 })

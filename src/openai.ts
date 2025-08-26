@@ -69,6 +69,21 @@ export class impl implements provider.Provider {
         const openaiMessages: types.OpenAIMessage[] = []
         const toolCallMap = new Map<string, string>()
 
+        // First pass: collect all successful tool_results to know which tool_calls have responses
+        const successfulToolResultIds = new Set<string>()
+        for (const message of claudeMessages) {
+            if (typeof message.content !== 'string') {
+                for (const content of message.content) {
+                    if (content.type === 'tool_result') {
+                        const isError = (content as any).is_error === true
+                        if (!isError) {
+                            successfulToolResultIds.add(content.tool_use_id)
+                        }
+                    }
+                }
+            }
+        }
+
         for (const message of claudeMessages) {
             if (typeof message.content === 'string') {
                 openaiMessages.push({
@@ -89,21 +104,38 @@ export class impl implements provider.Provider {
                         break
                     case 'tool_use':
                         toolCallMap.set(content.id, content.id)
-                        toolCalls.push({
-                            id: content.id,
-                            type: 'function',
-                            function: {
-                                name: content.name,
-                                arguments: JSON.stringify(content.input)
-                            }
-                        })
+                        // Only include tool_calls that have successful tool_results
+                        if (successfulToolResultIds.has(content.id)) {
+                            toolCalls.push({
+                                id: content.id,
+                                type: 'function',
+                                function: {
+                                    name: content.name,
+                                    arguments: JSON.stringify(content.input)
+                                }
+                            })
+                        } else {
+                            // Convert failed tool_use to meaningful feedback message
+                            textContents.push(`[User interrupted: ${content.name} operation was cancelled by user]`)
+                        }
                         break
                     case 'tool_result':
-                        toolResults.push({
-                            tool_call_id: content.tool_use_id,
-                            content:
-                                typeof content.content === 'string' ? content.content : JSON.stringify(content.content)
-                        })
+                        const isError = (content as any).is_error === true
+                        if (!isError) {
+                            // Successful tool result
+                            toolResults.push({
+                                tool_call_id: content.tool_use_id,
+                                content: typeof content.content === 'string' ? content.content : JSON.stringify(content.content)
+                            })
+                        } else {
+                            // Convert error tool result to user feedback about interruption
+                            const errorContent = typeof content.content === 'string' ? content.content : JSON.stringify(content.content)
+                            if (errorContent.includes('Interrupted by user')) {
+                                textContents.push(`[User provided feedback: The previous action was interrupted. Please pay attention to the new user input and adjust your approach accordingly.]`)
+                            } else {
+                                textContents.push(`[Tool execution error: ${errorContent}]`)
+                            }
+                        }
                         break
                 }
             }
@@ -124,6 +156,7 @@ export class impl implements provider.Provider {
                 openaiMessages.push(openaiMessage)
             }
 
+            // Add successful tool results as separate messages
             for (const toolResult of toolResults) {
                 openaiMessages.push({
                     role: 'tool',
@@ -159,11 +192,23 @@ export class impl implements provider.Provider {
 
             if (message.tool_calls) {
                 for (const toolCall of message.tool_calls) {
+                    let input: any = {};
+                    try {
+                        // Fix Qwen3-coder's single quotes issue
+                        let argsString = toolCall.function.arguments || '{}';
+                        // Replace single quotes with double quotes for JSON parsing
+                        argsString = argsString.replace(/'/g, '"');
+                        input = JSON.parse(argsString);
+                    } catch (e) {
+                        console.error('Failed to parse tool arguments:', toolCall.function.arguments, 'Error:', e);
+                        input = {};
+                    }
+                    
                     claudeResponse.content.push({
                         type: 'tool_use',
                         id: toolCall.id,
                         name: toolCall.function.name,
-                        input: JSON.parse(toolCall.function.arguments)
+                        input: input
                     })
                 }
                 claudeResponse.stop_reason = 'tool_use'
