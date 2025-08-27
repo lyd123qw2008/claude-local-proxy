@@ -66,6 +66,17 @@ export class impl implements provider.Provider {
     }
 
     private convertMessages(claudeMessages: types.ClaudeMessage[]): types.OpenAIMessage[] {
+        // 添加调试日志
+        if (process.env.DEBUG === 'true') {
+            console.log('[DEBUG] convertMessages - Received Claude messages:', JSON.stringify(claudeMessages, null, 2));
+        }
+        
+        // 清理不完整的工具调用对，确保每个 tool_use 都有对应的 tool_result
+        const cleanedMessages = this.cleanIncompleteToolCalls(claudeMessages);
+        if (process.env.DEBUG === 'true') {
+            console.log('[DEBUG] convertMessages - Cleaned Claude messages:', JSON.stringify(cleanedMessages, null, 2));
+        }
+        
         const openaiMessages: types.OpenAIMessage[] = []
         const toolCallMap = new Map<string, string>()
 
@@ -83,8 +94,13 @@ export class impl implements provider.Provider {
                 }
             }
         }
+        
+        // 添加调试日志
+        if (process.env.DEBUG === 'true') {
+            console.log('[DEBUG] convertMessages - Successful tool result IDs:', Array.from(successfulToolResultIds));
+        }
 
-        for (const message of claudeMessages) {
+        for (const message of cleanedMessages) {
             if (typeof message.content === 'string') {
                 openaiMessages.push({
                     role: message.role === 'assistant' ? 'assistant' : 'user',
@@ -103,9 +119,16 @@ export class impl implements provider.Provider {
                         textContents.push(content.text)
                         break
                     case 'tool_use':
+                        // 添加调试日志
+                        if (process.env.DEBUG === 'true') {
+                            console.log(`[DEBUG] Found tool_use: id=${content.id}, name=${content.name}`);
+                        }
                         toolCallMap.set(content.id, content.id)
                         // Only include tool_calls that have successful tool_results
                         if (successfulToolResultIds.has(content.id)) {
+                            if (process.env.DEBUG === 'true') {
+                                console.log(`[DEBUG] Tool call ${content.id} has successful result, keeping it`);
+                            }
                             toolCalls.push({
                                 id: content.id,
                                 type: 'function',
@@ -115,11 +138,18 @@ export class impl implements provider.Provider {
                                 }
                             })
                         } else {
+                            if (process.env.DEBUG === 'true') {
+                                console.log(`[DEBUG] Tool call ${content.id} has no successful result, converting to text`);
+                            }
                             // Convert failed tool_use to meaningful feedback message
                             textContents.push(`[User interrupted: ${content.name} operation was cancelled by user]`)
                         }
                         break
                     case 'tool_result':
+                        // 添加调试日志
+                        if (process.env.DEBUG === 'true') {
+                            console.log(`[DEBUG] Found tool_result: tool_use_id=${content.tool_use_id}, is_error=${(content as any).is_error}`);
+                        }
                         const isError = (content as any).is_error === true
                         if (!isError) {
                             // Successful tool result
@@ -169,6 +199,54 @@ export class impl implements provider.Provider {
         return openaiMessages
     }
 
+    private cleanIncompleteToolCalls(messages: types.ClaudeMessage[]): types.ClaudeMessage[] {
+        // 收集所有 tool_result 的 tool_use_id
+        const toolResultIds = new Set<string>();
+        for (const message of messages) {
+            if (typeof message.content !== 'string') {
+                for (const content of message.content) {
+                    if (content.type === 'tool_result') {
+                        toolResultIds.add(content.tool_use_id);
+                    }
+                }
+            }
+        }
+        
+        if (process.env.DEBUG === 'true') {
+            console.log('[DEBUG] cleanIncompleteToolCalls - Tool result IDs:', Array.from(toolResultIds));
+        }
+        
+        // 过滤掉不完整的消息对，只保留工具调用和结果都完整的消息
+        return messages.filter(message => {
+            if (typeof message.content === 'string') {
+                return true; // 文本消息总是保留
+            }
+            
+            // 检查是否包含 tool_use
+            const hasToolUse = message.content.some(content => content.type === 'tool_use');
+            if (!hasToolUse) {
+                return true; // 没有 tool_use 的消息总是保留
+            }
+            
+            // 检查所有 tool_use 是否都有对应的 tool_result
+            const incompleteToolUses = message.content.filter(content => {
+                if (content.type === 'tool_use') {
+                    return !toolResultIds.has(content.id);
+                }
+                return false;
+            }) as Array<{ type: 'tool_use'; id: string; name: string; input: any }>;
+            
+            if (incompleteToolUses.length > 0) {
+                if (process.env.DEBUG === 'true') {
+                    console.log('[DEBUG] cleanIncompleteToolCalls - Removing message with incomplete tool uses:', incompleteToolUses.map(tu => ({ id: tu.id, name: tu.name })));
+                }
+                return false; // 移除有不完整 tool_use 的消息
+            }
+            
+            return true;
+        });
+    }
+
     private async convertNormalResponse(openaiResponse: Response): Promise<Response> {
         const openaiData = (await openaiResponse.json()) as types.OpenAIResponse
 
@@ -196,9 +274,22 @@ export class impl implements provider.Provider {
                     try {
                         // Fix Qwen3-coder's single quotes issue
                         let argsString = toolCall.function.arguments || '{}';
-                        // Replace single quotes with double quotes for JSON parsing
-                        argsString = argsString.replace(/'/g, '"');
-                        input = JSON.parse(argsString);
+                        // 尝试直接解析
+                        try {
+                            input = JSON.parse(argsString);
+                        } catch (e1) {
+                            // 如果直接解析失败，尝试修复单引号问题
+                            if (process.env.DEBUG === 'true') {
+                                console.log('[DEBUG] Failed to parse arguments directly, trying to fix single quotes:', argsString);
+                            }
+                            argsString = argsString.replace(/'/g, '"');
+                            try {
+                                input = JSON.parse(argsString);
+                            } catch (e2) {
+                                console.error('Failed to parse tool arguments after fixing single quotes:', argsString, 'Error:', e2);
+                                input = {};
+                            }
+                        }
                     } catch (e) {
                         console.error('Failed to parse tool arguments:', toolCall.function.arguments, 'Error:', e);
                         input = {};

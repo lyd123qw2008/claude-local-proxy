@@ -10,6 +10,7 @@
 - 🛠️ **工具调用**: 全面支持函数/工具调用功能
 - 🌐 **多提供商**: 支持 Gemini 和 OpenAI API
 - 🏠 **本地部署**: 完全在本地运行，无需云服务
+- 🛡️ **代理支持**: 支持 HTTP/HTTPS 代理配置
 
 ## 支持的 AI 提供商
 
@@ -41,6 +42,10 @@ GEMINI_API_KEY="your-gemini-api-key"
 
 # OpenAI API 密钥
 OPENAI_API_KEY="your-openai-api-key"
+
+# 可选：代理配置
+# HTTPS_PROXY="http://proxy-host:proxy-port"
+# HTTP_PROXY="http://proxy-host:proxy-port"
 ```
 
 ### 3. 启动服务
@@ -69,14 +74,19 @@ curl http://localhost:3000/health
 
 ### API 密钥认证
 
-支持两种 API 密钥传递方式：
+支持三种 API 密钥传递方式：
 
 1. **通过 Header（推荐）**:
    ```bash
    -H "x-api-key: your-api-key"
    ```
 
-2. **通过环境变量**:
+2. **通过 Authorization Header**:
+   ```bash
+   -H "Authorization: Bearer your-api-key"
+   ```
+
+3. **通过环境变量**:
    ```bash
    # 在 .env 文件中设置
    GEMINI_API_KEY="your-gemini-api-key"
@@ -151,7 +161,7 @@ curl -X POST http://localhost:3000/gemini/https://generativelanguage.googleapis.
   -H "x-api-key: your-gemini-api-key" \
   -d '{
     "model": "gemini-1.5-flash",
-    "messages": [{"role": "user", "content": "What'\''s the weather in Paris?"}],
+    "messages": [{"role": "user", "content": "What\'s the weather in Paris?"}],
     "stream": false,
     "tools": [
       {
